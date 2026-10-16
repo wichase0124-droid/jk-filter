@@ -49,7 +49,20 @@
       };
       document.body.appendChild(bd);
     }
-    bd.textContent = '표시 ' + (items.length - h) + ' / 전체 ' + items.length + ' (차단 ' + h + ') · 목록편집';
+    // 사이트가 표시하는 총건수와 실제 로드된 건수를 대조해 표기 (불일치 시 경고)
+    const totalEl = document.querySelector('.filter-total_result');
+    let siteTotal = 0;
+    if (totalEl) {
+      siteTotal = parseInt(totalEl.getAttribute('data-filteragicnt') || '0', 10) || 0;
+      if (!siteTotal) {
+        const st = totalEl.querySelector('strong');
+        if (st) siteTotal = parseInt(st.textContent.replace(/[^\d]/g, ''), 10) || 0;
+      }
+    }
+    const loaded = items.length;
+    let label = '전체 ' + (siteTotal || loaded) + ' · 로드 ' + loaded + ' · 차단 ' + h + ' · 표시 ' + (loaded - h);
+    if (siteTotal && loaded < siteTotal) label += ' · ⚠ 일부만 로드됨';
+    bd.textContent = label + ' · 목록편집';
   };
 
   const u = new URL(location.href);
