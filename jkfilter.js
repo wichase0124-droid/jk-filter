@@ -1,4 +1,4 @@
-// JK 필터 v2.3 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// JK 필터 v2.4 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
 // 동작: pageSize=1000 전체 로드 -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
@@ -229,6 +229,22 @@
     const st = {}; BANDS.forEach(b => st[b.id] = open); setLS('jkBandOpen', st); organize();
   }
 
+  // 공고 탭은 브라우저 기본 동작에 맡기지 않고 무조건 새 탭으로 연다 (일부 브라우저가 target=_blank를 같은 탭으로 처리하는 문제 회피)
+  function forceNewTab() {
+    if (window.__jkNewTab) return;
+    window.__jkNewTab = true;
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('.jk-block-chip')) return; // 차단 칩은 원래 동작 유지
+      const item = e.target.closest('.recruit-item');
+      if (!item) return;
+      const a = item.querySelector('.section-item_link');
+      if (!a || !a.href) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.open(a.href, '_blank');
+    }, true);
+  }
+
   function renderAll() { applyFilter(); organize(); }
 
   function addBlocked(corp, anchor) {
@@ -285,6 +301,7 @@
     listWrap.parentNode.insertBefore(barEl, listWrap);
     listWrap.parentNode.insertBefore(groupsEl, listWrap);
     attachChips();
+    forceNewTab();
     makeBadge();
     renderAll();
   })();
