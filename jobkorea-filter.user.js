@@ -1,7 +1,9 @@
 // ==UserScript==
 // @name         잡코리아 업체 필터 + 반경 그룹핑
 // @namespace    jk-filter
-// @version      1.6.0
+// @version      1.6.1
+// @downloadURL  https://raw.githack.com/wichase0124-droid/jk-filter/main/jobkorea-filter.user.js
+// @updateURL    https://raw.githack.com/wichase0124-droid/jk-filter/main/jobkorea-filter.user.js
 // @description  잡코리아 모바일 검색에서 지정 업체 공고를 숨기고, 용인 기흥구 고매동 기준 반경(5/10/20/40km) 아코디언으로 그룹핑. 카드 클린 모드(제목+링크만). 공고의 '차단' 칩으로 업체 추가, 우하단 배지에서 목록 편집.
 // @match        https://m.jobkorea.co.kr/Search/Adv*
 // @run-at       document-idle
