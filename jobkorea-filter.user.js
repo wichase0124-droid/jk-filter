@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         잡코리아 업체 필터 + 반경 그룹핑
 // @namespace    jk-filter
-// @version      1.5.0
+// @version      1.6.0
 // @description  잡코리아 모바일 검색에서 지정 업체 공고를 숨기고, 용인 기흥구 고매동 기준 반경(5/10/20/40km) 아코디언으로 그룹핑. 카드 클린 모드(제목+링크만). 공고의 '차단' 칩으로 업체 추가, 우하단 배지에서 목록 편집.
 // @match        https://m.jobkorea.co.kr/Search/Adv*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 
-// JK 필터 v2.1 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// JK 필터 v2.3 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
 // 동작: pageSize=1000 전체 로드 -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
@@ -146,7 +146,11 @@
       // 카드: 배지(합격축하금·이직하기 딱 등)·업체 로고/이름·조건·등록뱃지·스크랩 숨기고 제목만
       '.recruit-item .bedges,.recruit-item .item-corp,.recruit-item .item-condition,.recruit-item .item-reward,.recruit-item .button-scrap,.recruit-item input.input-checkbox{display:none!important}',
       '.recruit-item{padding:12px 12px 10px!important;min-height:0!important}',
-      '.recruit-item .item-title{display:block!important;font-size:15px!important;font-weight:600!important;line-height:1.4!important;color:#111!important;white-space:normal!important}'
+      '.recruit-item .item-title{display:-webkit-box!important;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden!important;font-size:15px!important;font-weight:600!important;line-height:1.4!important;color:#111!important;white-space:normal!important}',
+      // 그룹으로 옮기면 사이트 CSS(.section-content_wide 자손 선택자)가 끊겨 전체-카드 링크 오버레이가 사라지므로 여기서 복원
+      '#jkGroups .recruit-item{position:relative}',
+      '#jkGroups .section-item{background-color:#fff}',
+      '#jkGroups .section-item_link{position:absolute!important;top:0;bottom:0;left:0;right:0;font-size:0;z-index:1;display:block}'
     ].join('\n');
     document.head.appendChild(st);
   }
