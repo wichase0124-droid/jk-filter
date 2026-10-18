@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         잡코리아 업체 필터 + 반경 그룹핑
 // @namespace    jk-filter
-// @version      1.7.0
+// @version      1.8.0
 // @downloadURL  https://raw.githack.com/wichase0124-droid/jk-filter/main/jobkorea-filter.user.js
 // @updateURL    https://raw.githack.com/wichase0124-droid/jk-filter/main/jobkorea-filter.user.js
 // @description  잡코리아 모바일 검색에서 지정 업체 공고를 숨기고, 용인 기흥구 고매동 기준 반경(5/10/20/40km) 아코디언으로 그룹핑. 카드 클린 모드(제목+링크만). 공고의 '차단' 칩으로 업체 추가, 우하단 배지에서 목록 편집.
@@ -10,8 +10,8 @@
 // @grant        none
 // ==/UserScript==
 
-// JK 필터 v2.4 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
-// 동작: pageSize=1000 전체 로드 -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
+// JK 필터 v2.5 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// 동작: pageSize=3000 전체 로드(등록기간 필터는 제거해 전체 기간 대상) -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
   window.__jkFilter = true;
@@ -65,6 +65,7 @@
   const setLS = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
   function siteTotalCount() {
+    if (fetchedTotal) return fetchedTotal;
     const el = document.querySelector('.filter-total_result');
     if (!el) return 0;
     let n = parseInt(el.getAttribute('data-filteragicnt') || '0', 10) || 0;
@@ -109,6 +110,7 @@
   }
 
   let allItems = []; // 서버 순서(등록일 내림차순) 그대로 보존
+  let fetchedTotal = 0; // 전체 로드 응답(period 제거 기준)의 서버 총건수 — 배지 '전체'는 이 값을 우선 사용
   let badge = null, groupsEl = null, barEl = null;
 
   function applyFilter() {
@@ -291,11 +293,14 @@
 
   async function swapList() {
     const u = new URL(location.href);
-    u.searchParams.set('pageSize', '1000');
+    u.searchParams.set('pageSize', '3000');
     u.searchParams.set('pageNo', '1');
+    u.searchParams.delete('period'); // 등록기간 필터 제거: 전체 기간을 대상으로 로드
     const res = await fetch(u.toString(), { credentials: 'include' });
     const html = await res.text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
+    const ft = doc.querySelector('.filter-total_result');
+    if (ft) fetchedTotal = parseInt(ft.getAttribute('data-filteragicnt') || '0', 10) || 0;
     const newList = doc.querySelector('.section-content_wide[role="list"]');
     const curList = document.querySelector('.section-content_wide[role="list"]');
     if (newList && curList) curList.replaceWith(newList);
