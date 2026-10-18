@@ -1,4 +1,4 @@
-// JK 필터 v2.9 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// JK 필터 v2.10 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
 // 동작: pageSize=3000 전체 로드(등록기간 필터는 제거해 전체 기간 대상) -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
@@ -57,7 +57,12 @@
   // 지원 기록은 공고번호 -> 지원 시기('YYYY-MM' | 'YYYY' | ''=시기 불명) 맵으로 저장
   let appliedWhen = (() => {
     const w = getLS('jkAppliedWhen', null);
-    if (w && typeof w === 'object') return new Map(Object.entries(w));
+    if (w && typeof w === 'object') {
+      const m = new Map(Object.entries(w));
+      // v4 이전 동기화는 지원내역 페이지의 추천 공고까지 수집하는 오염이 있어, 한 번 비우고 재동기화로 다시 채운다
+      if (getLS('jkSyncVer', 0) < 4 && m.size) { setLS('jkAppliedWhen', {}); setLS('jkAppliedIds', []); return new Map(); }
+      return m;
+    }
     const legacy = getLS('jkAppliedIds', []); // 구버전 마이그레이션: 시기는 불명으로 두고 다음 동기화에서 채운다
     if (legacy.length) setLS('jkApplySyncAt', 0);
     return new Map(legacy.map(id => [String(id), '']));
@@ -316,7 +321,8 @@
   let syncTxt = ''; // 동기화 결과 상태 문구 (상단 바에 표시)
   async function syncAppliedHistory() {
     try {
-      if (Date.now() - getLS('jkApplySyncAt', 0) < 60 * 60 * 1000) { syncTxt = '지원기록 ' + appliedIds.size + '건'; organize(); return; }
+      const forceSync = getLS('jkSyncVer', 0) < 4; // 동기화 방식이 바뀐 버전에서는 잠금 무시하고 한 번 다시 수집
+      if (!forceSync && Date.now() - getLS('jkApplySyncAt', 0) < 60 * 60 * 1000) { syncTxt = '지원기록 ' + appliedIds.size + '건'; organize(); return; }
       const now = new Date();
       const pad = n => String(n).padStart(2, '0');
       const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
@@ -355,11 +361,36 @@
             markApplied(id, when || rangeYear);
             if (isNew) added++;
           };
-          doc.querySelectorAll('a[href*="GI_Read"], [data-gno], [onclick*="goRead"], [onclick*="GoRead"]').forEach(el => {
+          // 지원내역 행 전용 패스: .applyDay가 있는 행에서 공고번호(Gno 파라미터)와 지원일(.tit 라벨 옆 .txt 날짜)을 짝지어 월까지 기록
+          let rowHits = 0;
+          doc.querySelectorAll('.applyDay').forEach(dayEl => {
+            let root = dayEl, gi = '';
+            for (let d = 0; d < 7 && root; d++) {
+              root = root.parentElement;
+              if (!root || !root.querySelectorAll) break;
+              const a = [...root.querySelectorAll('a')].find(x => /[?&]Gno=(\d+)/.test(x.getAttribute('href') || ''));
+              if (a) { gi = a.getAttribute('href').match(/[?&]Gno=(\d+)/)[1]; break; }
+            }
+            if (!gi || !root) return;
+            let when = '', firstDate = '', lastTit = '';
+            root.querySelectorAll('.tit, .txt').forEach(n => {
+              if (n.classList.contains('tit')) { lastTit = n.textContent || ''; return; }
+              const dd = dateIn(n.textContent || '');
+              if (!dd) return;
+              if (!firstDate) firstDate = dd;
+              if (!when && lastTit.includes('지원')) when = dd; // '지원일' 라벨의 값을 우선
+            });
+            noteId(gi, when || firstDate);
+            rowHits++;
+          });
+          // 행이 하나라도 잡힌 페이지는 행 기준 수집만 신뢰한다 (페이지 하단 추천 공고까지 지원으로 오인하는 오염 방지)
+          if (!rowHits) doc.querySelectorAll('a[href*="GI_Read"], a[href*="GI_No="], a[href*="Gno="], [data-gno], [onclick*="goRead"], [onclick*="GoRead"]').forEach(el => {
             const href = el.getAttribute('href') || '';
             const oc = el.getAttribute('onclick') || '';
-            const mm = href.match(/GI_Read\/(\d{5,})/) || oc.match(/[gG]oRead\((\d{5,})/);
-            const id = mm ? mm[1] : (el.getAttribute('data-gno') || '');
+            const mPath = href.match(/GI_Read\/(\d{5,})/);
+            const mParam = href.match(/[?&](?:GI_No|Gno)=(\d+)/);
+            const mGo = oc.match(/[gG]oRead\((\d{5,})/);
+            const id = (mPath && mPath[1]) || (mParam && mParam[1]) || (mGo && mGo[1]) || el.getAttribute('data-gno') || '';
             if (!id) return;
             let when = '', node = el;
             for (let depth = 0; depth < 7 && node; depth++) {
@@ -373,8 +404,8 @@
             }
             noteId(id, when);
           });
-          // DOM에서 못 잡은 번호는 원문 정규식으로 보완 (시기는 조회 연도)
-          (html.match(/(?:GI_Read\/|gno=|data-gno="|goRead\(|GoRead\()\s*(\d{5,})/gi) || []).forEach(s => {
+          // DOM에서 못 잡은 번호는 원문 정규식으로 보완 (행이 없는 페이지에서만, 시기는 조회 연도)
+          if (!rowHits) (html.match(/(?:GI_Read\/|gno=|data-gno="|goRead\(|GoRead\()\s*(\d{5,})/gi) || []).forEach(s => {
             const id = s.match(/(\d{5,})/)[1];
             if (!seenHere.has(id)) noteId(id, '');
           });
@@ -396,7 +427,7 @@
         if (needLogin) break;
       }
       if (added) saveApplied();
-      if (reached) setLS('jkApplySyncAt', Date.now());
+      if (reached) { setLS('jkApplySyncAt', Date.now()); setLS('jkSyncVer', 4); }
       syncTxt = needLogin ? '지원동기화: 로그인 필요' : (reached ? '지원동기화: ' + foundSet.size + '건 확인' : '지원동기화: 실패');
       console.info('[jkfilter]', syncTxt, '| 누적 지원기록', appliedIds.size + '건');
       organize(); // 상태 문구와 새 태그를 화면에 반영
