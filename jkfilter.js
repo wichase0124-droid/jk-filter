@@ -1,4 +1,4 @@
-// JK 필터 v2.7 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// JK 필터 v2.7.1 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
 // 동작: pageSize=3000 전체 로드(등록기간 필터는 제거해 전체 기간 대상) -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
@@ -400,13 +400,19 @@
     makeBadge();
     renderAll();
     syncAppliedHistory(); // 과거 지원 내역 백필 (비동기, 끝나면 태그 재반영)
-    // 상세 탭에 다녀오거나 뒤로가기로 돌아오면 새로고침 없이 기록을 다시 읽어 태그를 재반영
+    // 상세(새 탭)에 다녀오거나 뒤로가기로 목록에 돌아오면, 새로고침 없이 그 자리에서 읽음/지원 태그를 재반영
+    let markSig = readIds.size + '/' + appliedIds.size;
     const refreshMarks = () => {
       readIds = new Set(getLS('jkReadIds', []));
       appliedIds = new Set(getLS('jkAppliedIds', []));
+      const sig = readIds.size + '/' + appliedIds.size;
+      if (sig === markSig) return; // 바뀐 기록이 없으면 재렌더 생략 (스크롤 점프 방지)
+      markSig = sig;
       organize();
     };
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshMarks(); });
-    window.addEventListener('pageshow', refreshMarks);
+    window.addEventListener('pageshow', refreshMarks); // 뒤로가기(bfcache 복원) 포함
+    window.addEventListener('focus', refreshMarks);
+    window.addEventListener('popstate', refreshMarks);
   })();
 })();
