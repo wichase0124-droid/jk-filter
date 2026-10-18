@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         잡코리아 업체 필터 + 반경 그룹핑
 // @namespace    jk-filter
-// @version      1.10.0
+// @version      1.10.1
 // @downloadURL  https://raw.githack.com/wichase0124-droid/jk-filter/main/jobkorea-filter.user.js
 // @updateURL    https://raw.githack.com/wichase0124-droid/jk-filter/main/jobkorea-filter.user.js
 // @description  잡코리아 모바일 검색에서 지정 업체 공고를 숨기고, 용인 기흥구 고매동 기준 반경(5/10/20/40km) 아코디언으로 그룹핑. 카드 클린 모드(제목+링크만). 공고의 '차단' 칩으로 업체 추가, 우하단 배지에서 목록 편집.
@@ -11,7 +11,7 @@
 // @grant        none
 // ==/UserScript==
 
-// JK 필터 v2.7 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// JK 필터 v2.7.1 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
 // 동작: pageSize=3000 전체 로드(등록기간 필터는 제거해 전체 기간 대상) -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
@@ -413,13 +413,19 @@
     makeBadge();
     renderAll();
     syncAppliedHistory(); // 과거 지원 내역 백필 (비동기, 끝나면 태그 재반영)
-    // 상세 탭에 다녀오거나 뒤로가기로 돌아오면 새로고침 없이 기록을 다시 읽어 태그를 재반영
+    // 상세(새 탭)에 다녀오거나 뒤로가기로 목록에 돌아오면, 새로고침 없이 그 자리에서 읽음/지원 태그를 재반영
+    let markSig = readIds.size + '/' + appliedIds.size;
     const refreshMarks = () => {
       readIds = new Set(getLS('jkReadIds', []));
       appliedIds = new Set(getLS('jkAppliedIds', []));
+      const sig = readIds.size + '/' + appliedIds.size;
+      if (sig === markSig) return; // 바뀐 기록이 없으면 재렌더 생략 (스크롤 점프 방지)
+      markSig = sig;
       organize();
     };
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshMarks(); });
-    window.addEventListener('pageshow', refreshMarks);
+    window.addEventListener('pageshow', refreshMarks); // 뒤로가기(bfcache 복원) 포함
+    window.addEventListener('focus', refreshMarks);
+    window.addEventListener('popstate', refreshMarks);
   })();
 })();
