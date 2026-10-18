@@ -1,16 +1,17 @@
 // ==UserScript==
 // @name         잡코리아 업체 필터 + 반경 그룹핑
 // @namespace    jk-filter
-// @version      1.8.0
+// @version      1.9.0
 // @downloadURL  https://raw.githack.com/wichase0124-droid/jk-filter/main/jobkorea-filter.user.js
 // @updateURL    https://raw.githack.com/wichase0124-droid/jk-filter/main/jobkorea-filter.user.js
 // @description  잡코리아 모바일 검색에서 지정 업체 공고를 숨기고, 용인 기흥구 고매동 기준 반경(5/10/20/40km) 아코디언으로 그룹핑. 카드 클린 모드(제목+링크만). 공고의 '차단' 칩으로 업체 추가, 우하단 배지에서 목록 편집.
 // @match        https://m.jobkorea.co.kr/Search/Adv*
+// @match        https://m.jobkorea.co.kr/Recruit/GI_Read*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 
-// JK 필터 v2.5 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// JK 필터 v2.6 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
 // 동작: pageSize=3000 전체 로드(등록기간 필터는 제거해 전체 기간 대상) -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
@@ -63,6 +64,18 @@
   const corpOf = item => { const el = item.querySelector('.item-corp_name'); return el ? el.textContent.trim() : ''; };
   const getLS = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
   const setLS = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+
+  // 읽음/지원 기록 (공고 GI 번호 기준, localStorage에 영속)
+  let readIds = new Set(getLS('jkReadIds', []));
+  let appliedIds = new Set(getLS('jkAppliedIds', []));
+  function saveIds(key, set) { let a = [...set]; if (a.length > 5000) a = a.slice(a.length - 5000); setLS(key, a); }
+  function giOf(item) {
+    const a = item.querySelector('.section-item_link');
+    const m = a && a.getAttribute('href') && a.getAttribute('href').match(/GI_Read\/(\d+)/);
+    return m ? m[1] : (item.getAttribute('data-gno') || '');
+  }
+  function markRead(id) { if (id && !readIds.has(id)) { readIds.add(id); saveIds('jkReadIds', readIds); } }
+  function markApplied(id) { if (id && !appliedIds.has(id)) { appliedIds.add(id); saveIds('jkAppliedIds', appliedIds); } }
 
   function siteTotalCount() {
     if (fetchedTotal) return fetchedTotal;
@@ -151,6 +164,10 @@
       '.recruit-item .bedges,.recruit-item .item-corp,.recruit-item .item-condition,.recruit-item .item-reward,.recruit-item .button-scrap,.recruit-item input.input-checkbox{display:none!important}',
       '.recruit-item{padding:12px 12px 10px!important;min-height:0!important}',
       '.recruit-item .item-title{display:-webkit-box!important;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden!important;font-size:15px!important;font-weight:600!important;line-height:1.4!important;color:#111!important;white-space:normal!important}',
+      // 지원/읽음 태그 (제목 앞)
+      '.jk-tag{display:inline-block;vertical-align:2px;border-radius:4px;padding:0 6px;margin-right:5px;font-size:10px;font-weight:800;line-height:1.6}',
+      '.jk-tag-applied{background:#16a34a;color:#fff}',
+      '.jk-tag-read{background:#e5e7eb;color:#374151;border:1px solid #9ca3af}',
       // 그룹으로 옮기면 사이트 CSS(.section-content_wide 자손 선택자)가 끊겨 전체-카드 링크 오버레이가 사라지므로 여기서 복원
       '#jkGroups .recruit-item{position:relative}',
       '#jkGroups .section-item{background-color:#fff}',
@@ -211,6 +228,19 @@
           ? '📍 거리 미상 · ' + (loc.raw || '지역 표기 없음') + ' · ' + corpOf(it)
           : '📍 약 ' + km.toFixed(1) + 'km · ' + loc.raw + (loc.wide ? ' (광역·시도 중심 기준)' : '') + (loc.dongtan ? ' (동탄 방면 기준)' : '') + ' · ' + corpOf(it);
         it.classList.toggle('jk-new', reg !== null && reg <= 60);
+        // 지원/읽음 태그를 제목 앞에 표시
+        it.querySelectorAll('.jk-tag').forEach(t => t.remove());
+        const titleEl = it.querySelector('.item-title');
+        if (titleEl) {
+          const gi = giOf(it);
+          const tags = [];
+          if (appliedIds.has(gi) || /지원완료/.test(it.textContent)) { tags.push(['지원', 'jk-tag-applied']); if (gi) markApplied(gi); }
+          if (readIds.has(gi)) tags.push(['읽음', 'jk-tag-read']);
+          tags.reverse().forEach(([txt, cls]) => {
+            const s = document.createElement('span'); s.className = 'jk-tag ' + cls; s.textContent = txt;
+            titleEl.insertBefore(s, titleEl.firstChild); // 제목 첫 줄 맨 앞에 붙인다
+          });
+        }
         body.appendChild(it);
       });
       sec.appendChild(head); sec.appendChild(body);
@@ -255,6 +285,7 @@
       if (!a || !a.href) return;
       e.preventDefault();
       e.stopPropagation();
+      markRead(giOf(item)); // 연 공고는 읽음으로 기록
       window.open(a.href, '_blank');
     }, true);
   }
@@ -281,7 +312,7 @@
   function makeBadge() {
     badge = document.createElement('button');
     badge.type = 'button';
-    badge.setAttribute('style', 'position:fixed;right:12px;bottom:76px;z-index:9999;background:rgba(17,24,39,.92);color:#fff;border:0;border-radius:999px;padding:9px 14px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.35);');
+    badge.setAttribute('style', 'position:fixed;right:12px;bottom:76px;z-index:9999;background:#FFD60A;color:#111;border:1.5px solid #111;border-radius:999px;padding:9px 14px;font-size:12px;font-weight:700;box-shadow:0 3px 10px rgba(0,0,0,.45);');
     badge.addEventListener('click', () => {
       const v = prompt('차단할 업체명 (쉼표로 구분)', blocked.join(', '));
       if (v === null) return;
@@ -305,6 +336,21 @@
     const curList = document.querySelector('.section-content_wide[role="list"]');
     if (newList && curList) curList.replaceWith(newList);
   }
+
+  // 상세 페이지(GI_Read) 모드: '지원완료' 상태를 감지하면 그 공고를 지원·읽음으로 기록 (목록 태그용)
+  (function detailMode() {
+    const m = location.pathname.match(/\/Recruit\/GI_Read\/(\d+)/);
+    if (!m) return;
+    const gi = m[1];
+    markRead(gi); // 상세를 열었으니 읽음 처리
+    const appliedShown = () => [...document.querySelectorAll('button, a')].some(el => (el.textContent || '').replace(/\s+/g, '').includes('지원완료'));
+    const check = () => { if (appliedShown()) markApplied(gi); };
+    [600, 1500, 3000, 6000].forEach(t => setTimeout(check, t)); // 상세는 React 렌더링이라 몇 차례 나눠 확인
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest('button, a');
+      if (b && /지원하기|즉시지원/.test(b.textContent || '')) setTimeout(check, 2500); // 지원 직후 상태 재확인
+    }, true);
+  })();
 
   (async () => {
     try { await swapList(); } catch (e) { /* 실패 시 현재 페이지 목록으로 진행 */ }
