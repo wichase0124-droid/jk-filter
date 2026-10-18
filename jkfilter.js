@@ -1,4 +1,4 @@
-// JK 필터 v2.10 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// JK 필터 v2.10.1 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
 // 동작: pageSize=3000 전체 로드(등록기간 필터는 제거해 전체 기간 대상) -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
@@ -57,23 +57,20 @@
   // 지원 기록은 공고번호 -> 지원 시기('YYYY-MM' | 'YYYY' | ''=시기 불명) 맵으로 저장
   let appliedWhen = (() => {
     const w = getLS('jkAppliedWhen', null);
-    if (w && typeof w === 'object') {
-      const m = new Map(Object.entries(w));
-      // v4 이전 동기화는 지원내역 페이지의 추천 공고까지 수집하는 오염이 있어, 한 번 비우고 재동기화로 다시 채운다
-      if (getLS('jkSyncVer', 0) < 4 && m.size) { setLS('jkAppliedWhen', {}); setLS('jkAppliedIds', []); return new Map(); }
-      return m;
-    }
+    if (w && typeof w === 'object') return new Map(Object.entries(w));
     const legacy = getLS('jkAppliedIds', []); // 구버전 마이그레이션: 시기는 불명으로 두고 다음 동기화에서 채운다
     if (legacy.length) setLS('jkApplySyncAt', 0);
     return new Map(legacy.map(id => [String(id), '']));
   })();
   let appliedIds = new Set(appliedWhen.keys());
   function saveIds(key, set) { let a = [...set]; if (a.length > 5000) a = a.slice(a.length - 5000); setLS(key, a); }
+  let stagingSync = false; // 강제 재동기화 중에는 성공이 확정될 때까지 저장을 보류 (실패 시 기존 기록 보호)
   function saveApplied() {
     let entries = [...appliedWhen.entries()];
     if (entries.length > 5000) entries = entries.slice(entries.length - 5000);
     appliedWhen = new Map(entries);
     appliedIds = new Set(appliedWhen.keys());
+    if (stagingSync) return;
     setLS('jkAppliedWhen', Object.fromEntries(appliedWhen));
     setLS('jkAppliedIds', [...appliedIds]);
   }
@@ -326,6 +323,8 @@
       const now = new Date();
       const pad = n => String(n).padStart(2, '0');
       const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+      let backup = null;
+      if (forceSync) { backup = appliedWhen; appliedWhen = new Map(); appliedIds = new Set(); stagingSync = true; } // 오염 기록 교체: 새 수집이 성공할 때만 갈아끼움
       const today = ymd(now), Y = now.getFullYear();
       // 조회 기간은 1년 단위 두 번으로 나눠 요청 (긴 기간을 서버가 거부하는 경우 회피): 올해 1/1~오늘, 작년 전체
       const ranges = [[Y + '-01-01', today], [(Y - 1) + '-01-01', (Y - 1) + '-12-31']];
@@ -426,9 +425,18 @@
         }
         if (needLogin) break;
       }
+      if (stagingSync) {
+        stagingSync = false;
+        if (reached) {
+          backup.forEach((w, id) => { if (!appliedWhen.has(id) && w === '') appliedWhen.set(id, w); }); // 상세에서만 감지된 기록은 보존
+          saveApplied();
+        } else {
+          appliedWhen = backup; appliedIds = new Set(backup.keys()); // 실패하면 기존 기록 그대로 복원
+        }
+      }
       if (added) saveApplied();
       if (reached) { setLS('jkApplySyncAt', Date.now()); setLS('jkSyncVer', 4); }
-      syncTxt = needLogin ? '지원동기화: 로그인 필요' : (reached ? '지원동기화: ' + foundSet.size + '건 확인' : '지원동기화: 실패');
+      syncTxt = needLogin ? '지원동기화: 로그인 필요' : (reached ? '지원동기화: ' + foundSet.size + '건 확인' : '지원동기화: 실패' + (backup ? ' (기존 기록 유지)' : ''));
       console.info('[jkfilter]', syncTxt, '| 누적 지원기록', appliedIds.size + '건');
       organize(); // 상태 문구와 새 태그를 화면에 반영
     } catch (e) { /* 실패해도 기존 기능에 영향 없음 */ }
