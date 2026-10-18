@@ -1,4 +1,4 @@
-// JK 필터 v2.6 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// JK 필터 v2.7 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
 // 동작: pageSize=3000 전체 로드(등록기간 필터는 제거해 전체 기간 대상) -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
@@ -279,6 +279,51 @@
 
   function renderAll() { applyFilter(); organize(); }
 
+  // 지원 내역(ApplyMng) 동기화: 로그인 세션으로 지원내역 페이지를 읽어 과거 지원 공고까지 '지원' 태그 대상에 포함 (1시간에 한 번만)
+  async function syncAppliedHistory() {
+    try {
+      if (Date.now() - getLS('jkApplySyncAt', 0) < 60 * 60 * 1000) return;
+      const now = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const to = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+      const from = (now.getFullYear() - 2) + '-01-01';
+      const base = 'https://m.jobkorea.co.kr/TextUser/ApplyMng?From_Dt=' + from + '&To_Dt=' + to + '&IngStat=0&ReadStat=0&StatusStat=0&SearchText=';
+      const seen = new Set(), queue = [base];
+      let added = 0, guard = 0, ok = false;
+      while (queue.length && guard++ < 10) {
+        const url = queue.shift();
+        if (seen.has(url)) continue;
+        seen.add(url);
+        const res = await fetch(url, { credentials: 'include' });
+        const html = await res.text();
+        if (!res.ok || html.includes('Login/Login.asp')) break; // 비로그인/오류 시 조용히 중단 (기존 기록은 절대 지우지 않음)
+        ok = true;
+        (html.match(/GI_Read\/(\d+)/g) || []).forEach(s => {
+          const id = s.split('/')[1];
+          if (!appliedIds.has(id)) { appliedIds.add(id); added++; }
+        });
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        doc.querySelectorAll('a[href*="ApplyMng"]').forEach(a => { // 페이지네이션 링크 따라가기
+          const href = a.getAttribute('href');
+          if (!href) return;
+          const abs = new URL(href, location.origin).toString();
+          if (/[?&](Page|pageNo|PageNo|currentPage)=/i.test(abs) && !seen.has(abs) && !queue.includes(abs)) queue.push(abs);
+        });
+        // 자바스크립트 페이지네이션(goPage(n)) 형태면 파라미터명을 페이지 소스에서 찾아 나머지 페이지를 만든다
+        const pages = [...html.matchAll(/goPage\(\s*(\d+)\s*\)/g)].map(m => +m[1]);
+        if (pages.length) {
+          const pm = html.match(/(Page|pageNo|PageNo|currentPage)=/);
+          if (pm) for (let p = 2; p <= Math.max(...pages); p++) {
+            const u = new URL(base); u.searchParams.set(pm[1], String(p));
+            if (!seen.has(u.toString()) && !queue.includes(u.toString())) queue.push(u.toString());
+          }
+        }
+      }
+      if (added) { saveIds('jkAppliedIds', appliedIds); organize(); }
+      if (ok) setLS('jkApplySyncAt', Date.now());
+    } catch (e) { /* 실패해도 기존 기능에 영향 없음 */ }
+  }
+
   function addBlocked(corp, anchor) {
     if (!confirm('[' + corp + '] 공고를 앞으로 숨길까요?')) return;
     blocked.push(corp); save(blocked);
@@ -354,5 +399,14 @@
     forceNewTab();
     makeBadge();
     renderAll();
+    syncAppliedHistory(); // 과거 지원 내역 백필 (비동기, 끝나면 태그 재반영)
+    // 상세 탭에 다녀오거나 뒤로가기로 돌아오면 새로고침 없이 기록을 다시 읽어 태그를 재반영
+    const refreshMarks = () => {
+      readIds = new Set(getLS('jkReadIds', []));
+      appliedIds = new Set(getLS('jkAppliedIds', []));
+      organize();
+    };
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshMarks(); });
+    window.addEventListener('pageshow', refreshMarks);
   })();
 })();
