@@ -1,4 +1,4 @@
-// JK 필터 v2.8 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
+// JK 필터 v2.9 - 잡코리아 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드
 // 동작: pageSize=3000 전체 로드(등록기간 필터는 제거해 전체 기간 대상) -> 차단 업체 숨김 -> 기준점 반경(5/10/20/40km) 아코디언 그룹 + 등록일 정렬
 (() => {
   if (window.__jkFilter) return;
@@ -54,15 +54,37 @@
 
   // 읽음/지원 기록 (공고 GI 번호 기준, localStorage에 영속)
   let readIds = new Set(getLS('jkReadIds', []));
-  let appliedIds = new Set(getLS('jkAppliedIds', []));
+  // 지원 기록은 공고번호 -> 지원 시기('YYYY-MM' | 'YYYY' | ''=시기 불명) 맵으로 저장
+  let appliedWhen = (() => {
+    const w = getLS('jkAppliedWhen', null);
+    if (w && typeof w === 'object') return new Map(Object.entries(w));
+    const legacy = getLS('jkAppliedIds', []); // 구버전 마이그레이션: 시기는 불명으로 두고 다음 동기화에서 채운다
+    if (legacy.length) setLS('jkApplySyncAt', 0);
+    return new Map(legacy.map(id => [String(id), '']));
+  })();
+  let appliedIds = new Set(appliedWhen.keys());
   function saveIds(key, set) { let a = [...set]; if (a.length > 5000) a = a.slice(a.length - 5000); setLS(key, a); }
+  function saveApplied() {
+    let entries = [...appliedWhen.entries()];
+    if (entries.length > 5000) entries = entries.slice(entries.length - 5000);
+    appliedWhen = new Map(entries);
+    appliedIds = new Set(appliedWhen.keys());
+    setLS('jkAppliedWhen', Object.fromEntries(appliedWhen));
+    setLS('jkAppliedIds', [...appliedIds]);
+  }
   function giOf(item) {
     const a = item.querySelector('.section-item_link');
     const m = a && a.getAttribute('href') && a.getAttribute('href').match(/GI_Read\/(\d+)/);
     return m ? m[1] : (item.getAttribute('data-gno') || '');
   }
   function markRead(id) { if (id && !readIds.has(id)) { readIds.add(id); saveIds('jkReadIds', readIds); } }
-  function markApplied(id) { if (id && !appliedIds.has(id)) { appliedIds.add(id); saveIds('jkAppliedIds', appliedIds); } }
+  function markApplied(id, when) {
+    if (!id) return;
+    id = String(id);
+    const cur = appliedWhen.get(id);
+    if (cur === undefined) { appliedWhen.set(id, when || ''); appliedIds.add(id); saveApplied(); }
+    else if (when && when.length > cur.length) { appliedWhen.set(id, when); saveApplied(); } // 더 정확한 시기(월 단위)가 오면 교체
+  }
 
   function siteTotalCount() {
     if (fetchedTotal) return fetchedTotal;
@@ -154,6 +176,7 @@
       // 지원/읽음 태그 (제목 앞)
       '.jk-tag{display:inline-block;vertical-align:2px;border-radius:4px;padding:0 6px;margin-right:5px;font-size:10px;font-weight:800;line-height:1.6}',
       '.jk-tag-applied{background:#16a34a;color:#fff}',
+      '.jk-tag-applied-old{background:#2563eb;color:#fff}',
       '.jk-tag-read{background:#e5e7eb;color:#374151;border:1px solid #9ca3af}',
       // 그룹으로 옮기면 사이트 CSS(.section-content_wide 자손 선택자)가 끊겨 전체-카드 링크 오버레이가 사라지므로 여기서 복원
       '#jkGroups .recruit-item{position:relative}',
@@ -221,7 +244,13 @@
         if (titleEl) {
           const gi = giOf(it);
           const tags = [];
-          if (appliedIds.has(gi) || /지원완료/.test(it.textContent)) { tags.push(['지원', 'jk-tag-applied']); if (gi) markApplied(gi); }
+          if (appliedIds.has(gi) || /지원완료/.test(it.textContent)) {
+            const w = appliedWhen.get(gi) || '';
+            const yr = w ? parseInt(w.slice(0, 4), 10) : null;
+            const label = w ? (w.length >= 7 ? w.slice(2, 4) + '.' + w.slice(5, 7) + ' 지원' : w.slice(2, 4) + ' 지원') : '지원';
+            tags.push([label, (yr && yr < new Date().getFullYear()) ? 'jk-tag-applied-old' : 'jk-tag-applied']);
+            if (gi) markApplied(gi);
+          }
           if (readIds.has(gi)) tags.push(['읽음', 'jk-tag-read']);
           tags.reverse().forEach(([txt, cls]) => {
             const s = document.createElement('span'); s.className = 'jk-tag ' + cls; s.textContent = txt;
@@ -309,12 +338,46 @@
           if (res.url && /\/Login\//i.test(res.url)) { needLogin = true; break; } // 로그인 페이지로 튕긴 경우
           if (!res.ok) break;
           if (!res.url || res.url.includes('ApplyMng')) reached = true;
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const rangeYear = from.slice(0, 4);
+          // 행 단위 파싱: 공고 링크와 같은 행에 있는 지원일을 짝지어 월(YYYY-MM)까지 기록
+          const dateIn = (txt) => {
+            const m = txt.match(/(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})/) || txt.match(/(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/);
+            if (m) return m[1] + '-' + String(m[2]).padStart(2, '0');
+            const m2 = txt.match(/(\d{2})[-.\/](\d{1,2})[-.\/](\d{1,2})/);
+            return m2 ? '20' + m2[1] + '-' + String(m2[2]).padStart(2, '0') : '';
+          };
+          const seenHere = new Set();
+          const noteId = (id, when) => {
+            if (!id) return;
+            foundSet.add(id); seenHere.add(id);
+            const isNew = appliedWhen.get(id) === undefined;
+            markApplied(id, when || rangeYear);
+            if (isNew) added++;
+          };
+          doc.querySelectorAll('a[href*="GI_Read"], [data-gno], [onclick*="goRead"], [onclick*="GoRead"]').forEach(el => {
+            const href = el.getAttribute('href') || '';
+            const oc = el.getAttribute('onclick') || '';
+            const mm = href.match(/GI_Read\/(\d{5,})/) || oc.match(/[gG]oRead\((\d{5,})/);
+            const id = mm ? mm[1] : (el.getAttribute('data-gno') || '');
+            if (!id) return;
+            let when = '', node = el;
+            for (let depth = 0; depth < 7 && node; depth++) {
+              if (node.querySelectorAll && node.querySelectorAll('a[href*="GI_Read"]').length > 1) break; // 여러 행을 담은 컨테이너면 날짜를 채택하지 않음
+              const t = node.textContent || '';
+              const labeled = t.match(/지원[^\d]{0,12}((\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})|(\d{4})년\s*(\d{1,2})월)/);
+              if (labeled) { when = dateIn(labeled[0]); break; }
+              const d0 = dateIn(t);
+              if (d0 && d0 >= from.slice(0, 7) && d0 <= to.slice(0, 7)) { when = d0; break; } // 조회 구간 안의 날짜만 채택 (마감일 등 배제)
+              node = node.parentElement;
+            }
+            noteId(id, when);
+          });
+          // DOM에서 못 잡은 번호는 원문 정규식으로 보완 (시기는 조회 연도)
           (html.match(/(?:GI_Read\/|gno=|data-gno="|goRead\(|GoRead\()\s*(\d{5,})/gi) || []).forEach(s => {
             const id = s.match(/(\d{5,})/)[1];
-            foundSet.add(id);
-            if (!appliedIds.has(id)) { appliedIds.add(id); added++; }
+            if (!seenHere.has(id)) noteId(id, '');
           });
-          const doc = new DOMParser().parseFromString(html, 'text/html');
           doc.querySelectorAll('a[href*="ApplyMng"]').forEach(a => { // 페이지네이션 링크 따라가기
             const href = a.getAttribute('href');
             if (!href) return;
@@ -332,7 +395,7 @@
         }
         if (needLogin) break;
       }
-      if (added) saveIds('jkAppliedIds', appliedIds);
+      if (added) saveApplied();
       if (reached) setLS('jkApplySyncAt', Date.now());
       syncTxt = needLogin ? '지원동기화: 로그인 필요' : (reached ? '지원동기화: ' + foundSet.size + '건 확인' : '지원동기화: 실패');
       console.info('[jkfilter]', syncTxt, '| 누적 지원기록', appliedIds.size + '건');
@@ -417,11 +480,14 @@
     renderAll();
     syncAppliedHistory(); // 과거 지원 내역 백필 (비동기, 끝나면 태그 재반영)
     // 상세(새 탭)에 다녀오거나 뒤로가기로 목록에 돌아오면, 새로고침 없이 그 자리에서 읽음/지원 태그를 재반영
-    let markSig = readIds.size + '/' + appliedIds.size;
+    const sigOf = () => readIds.size + '/' + appliedIds.size + '/' + [...appliedWhen.values()].reduce((a, s) => a + (s ? s.length : 0), 0);
+    let markSig = sigOf();
     const refreshMarks = () => {
       readIds = new Set(getLS('jkReadIds', []));
-      appliedIds = new Set(getLS('jkAppliedIds', []));
-      const sig = readIds.size + '/' + appliedIds.size;
+      appliedWhen = new Map(Object.entries(getLS('jkAppliedWhen', {})));
+      if (!appliedWhen.size) getLS('jkAppliedIds', []).forEach(id => appliedWhen.set(String(id), ''));
+      appliedIds = new Set(appliedWhen.keys());
+      const sig = sigOf();
       if (sig === markSig) return; // 바뀐 기록이 없으면 재렌더 생략 (스크롤 점프 방지)
       markSig = sig;
       organize();
