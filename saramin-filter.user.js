@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.2
+// @version      1.0.3
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -9,7 +9,9 @@
 // @downloadURL  https://cdn.jsdelivr.net/gh/wichase0124-droid/jk-filter@main/saramin-filter.user.js
 // ==/UserScript==
 
-// SR 필터 v1.0.2 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그
+// SR 필터 v1.0.3 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그
+// v1.0.3: 실기기 '지역 미상 50건' 수정 — 지역이 링크 밖 래퍼에 있거나, 잎 요소로 쪼개지거나,
+// '경기도/서울특별시' 같은 정식 명칭인 경우에도 지역을 찾도록 파싱 범위를 래퍼까지 넓히고 토큰 결합·정식명칭 정규화를 추가
 // 잡코리아 필터와 별도 스크립트 (사이트 구조·식별자 체계가 다름). 지원내역 동기화는 지원내역 주소 확인 후 추가 예정.
 (() => {
   if (window.__srFilter) return;
@@ -88,24 +90,76 @@
   }
   const BADGE = /^(오늘 뜬|HOT|NEW|추천|긴급)$/;
   const DEADLINE = /^(~|D-|D\+|내일마감|오늘마감|상시채용|진행예정|채용시|마감)/;
-  const REGION = /서울|경기|인천|부산|대구|광주|대전|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주|전국|재택/;
-  const REGION_START = /^(서울|경기|인천|부산|대구|광주|대전|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주|전국|재택|해외)/;
+  const REGION = /서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|전라|경상|제주|전국|재택/;
+  const REGION_START = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|전라|경상|제주|전국|재택|해외)/;
   // 지역·조건 줄 뒤에 오는 조건 토큰(경력·학력·근무형태)은 회사명이 아니므로 건너뜀
   const COND_TOKEN = /^(경력|학력|초대졸|대졸|고졸|석사|박사|학력무관|경력무관|신입|정규직|계약직|인턴|파견|프리랜서|아르바이트|도급|위촉|병역)/;
   const JUNK_LINE = /^(기업이미지|이미지|스크랩|입사지원)$/;
+  // 파싱 범위: 링크 안에 지역이 없을 수 있어, 공고 1개만 담은 가장 바깥 래퍼까지 올라가서 파싱
+  // (실기기에서 지역·회사명이 링크 형제 요소에 있는 경우 링크만 파싱하면 지역이 전부 미상이 됨)
+  function parseScope(card) {
+    let scope = card, p = card.parentElement, depth = 0;
+    while (p && p !== document.body && depth < 4 && p.querySelectorAll('a[href^="/job-search/view?rec_idx="]').length === 1 && !p.querySelector('input,select,form')) {
+      scope = p; p = p.parentElement; depth++;
+    }
+    return scope;
+  }
+  // '서울' + '강남구', '경기' + '용인시' + '기흥구'처럼 잎 요소로 쪼개진 지역 토큰을 한 줄로 결합
+  const REG_ONLY = /^(서울(특별시)?|부산(광역시)?|대구(광역시)?|인천(광역시)?|광주(광역시)?|대전(광역시)?|울산(광역시)?|세종(특별자치시)?|경기(도)?|강원(특별자치도)?|충청(북|남)도|전라(북|남)도|경상(북|남)도|제주(특별자치도)?|전국|재택|해외)$/;
+  const DIST_TOK = /^.+?(시|구|군)$/;
+  function mergeRegionLines(lines) {
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const cur = lines[i];
+      if (REG_ONLY.test(cur)) {
+        const parts = [cur];
+        let j = i + 1;
+        while (j < lines.length && parts.length < 3 && DIST_TOK.test(lines[j]) && !COND_TOKEN.test(lines[j]) && !DEADLINE.test(lines[j]) && !JUNK_LINE.test(lines[j])) {
+          parts.push(lines[j]); j++;
+        }
+        if (parts.length > 1) { out.push(parts.join(' ')); i = j - 1; continue; }
+      }
+      out.push(cur);
+    }
+    return out;
+  }
+  // '서울 · 강남구 · 경력무관'처럼 '·'로 나뉜 줄에서 지역 부분만 모음 (조건 토큰에서 멈춤)
+  function regionFromLine(line) {
+    const parts = [];
+    for (const s of line.split('·').map(x => x.trim()).filter(Boolean)) {
+      if (COND_TOKEN.test(s) || DEADLINE.test(s) || JUNK_LINE.test(s)) break;
+      if (REGION.test(s) || DIST_TOK.test(s)) { parts.push(s); continue; }
+      break;
+    }
+    return parts.join(' ');
+  }
   function parseCard(card) {
     const href = card.getAttribute('href') || '';
     const m = href.match(/rec_idx=(\d+)/);
     const id = m ? m[1] : '';
-    const lines = textLines(card);
+    const lines = mergeRegionLines(textLines(parseScope(card)));
     // 실기기 확인: 지역이 단독 잎 요소인 경우가 많아 '·' 포함을 요구하지 않음
     let regIdx = -1, loc = '';
     for (let i = 0; i < lines.length; i++) {
-      if (REGION_START.test(lines[i])) { regIdx = i; loc = lines[i].split('·')[0].trim(); break; }
+      if (REGION_START.test(lines[i])) { regIdx = i; loc = regionFromLine(lines[i]) || lines[i].split('·')[0].trim(); break; }
     }
     if (regIdx < 0) {
       for (let i = 0; i < lines.length; i++) {
-        if (lines[i].includes('·') && REGION.test(lines[i])) { regIdx = i; loc = lines[i].split('·')[0].trim(); break; }
+        if (lines[i].includes('·') && REGION.test(lines[i])) { regIdx = i; loc = regionFromLine(lines[i]) || lines[i].split('·')[0].trim(); break; }
+      }
+    }
+    // 지역이 링크 뒤 형제 요소에 있는 경우(링크와 메타가 분리된 구조): 다음 공고 링크 전까지 형제 텍스트에서 지역을 찾음
+    if (regIdx < 0) {
+      const extra = [];
+      let sib = card.nextSibling;
+      while (sib) {
+        if (sib.nodeType === 1 && sib.matches && sib.matches('a[href^="/job-search/view?rec_idx="]')) break;
+        if (sib.nodeType === 1) extra.push(...textLines(sib));
+        sib = sib.nextSibling;
+      }
+      const merged = mergeRegionLines(extra);
+      for (let i = 0; i < merged.length; i++) {
+        if (REGION_START.test(merged[i])) { regIdx = lines.length; loc = regionFromLine(merged[i]) || merged[i].split('·')[0].trim(); lines.push(...merged); break; }
       }
     }
     let title = '', corp = '', deadline = '';
@@ -129,8 +183,19 @@
     const s = Math.sin(dLa / 2) ** 2 + Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin(dLo / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
   }
+  // 정식 명칭('서울특별시', '경기도', '충청북도' 등)을 DIST 키의 약칭('서울', '경기', '충북')으로 정규화
+  function normalizeRegion(loc) {
+    return (loc || '')
+      .replace(/서울특별시/g, '서울').replace(/부산광역시/g, '부산').replace(/대구광역시/g, '대구')
+      .replace(/인천광역시/g, '인천').replace(/광주광역시/g, '광주').replace(/대전광역시/g, '대전')
+      .replace(/울산광역시/g, '울산').replace(/세종특별자치시/g, '세종').replace(/경기도/g, '경기')
+      .replace(/강원특별자치도/g, '강원').replace(/충청북도/g, '충북').replace(/충청남도/g, '충남')
+      .replace(/전라북도/g, '전북').replace(/전라남도/g, '전남').replace(/경상북도/g, '경북')
+      .replace(/경상남도/g, '경남').replace(/제주특별자치도/g, '제주');
+  }
   function bandOf(loc) {
     if (!loc) return { band: 'unknown', km: null, disp: loc || '' };
+    loc = normalizeRegion(loc);
     let key = loc.replace(/\s+/g, '').replace(/외.*$/, '');
     // '서울 용산구' -> '서울용산구', '경기 수원시 영통구' -> 시군구 키는 '경기수원시영통구' 형태
     let coord = DIST[key];
