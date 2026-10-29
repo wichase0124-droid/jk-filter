@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.4
+// @version      1.0.5
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -9,7 +9,7 @@
 // @downloadURL  https://cdn.jsdelivr.net/gh/wichase0124-droid/jk-filter@main/saramin-filter.user.js
 // ==/UserScript==
 
-// SR 필터 v1.0.4 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 + 전체 로드
+// SR 필터 v1.0.5 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 + 전체 로드 + 뒤로가기 복원
 // v1.0.3: 실기기 '지역 미상 50건' 수정 — 지역이 링크 밖 래퍼에 있거나, 잎 요소로 쪼개지거나,
 // '경기도/서울특별시' 같은 정식 명칭인 경우에도 지역을 찾도록 파싱 범위를 래퍼까지 넓히고 토큰 결합·정식명칭 정규화를 추가
 // 잡코리아 필터와 별도 스크립트 (사이트 구조·식별자 체계가 다름). 지원내역 동기화는 지원내역 주소 확인 후 추가 예정.
@@ -264,7 +264,60 @@
   let cleanMode = getLS('srClean', true);
   let bandOpen = getLS('srBandOpen', { b5: true, b10: true, b20: true, b40: false, over: false, unknown: false });
   let groupsEl = null, badgeEl = null;
-  let wholeLoaded = false, wholeLoadedCount = 0, wholeLoading = false;
+  let wholeLoaded = false, wholeLoadedCount = 0, wholeLoading = false, restoreAttempted = false;
+
+  // 검색 식별자 (page 파라미터 제외) — 전체 로드 캐시의 검색 일치 판정용
+  function searchKey() {
+    const u = new URL(location.href);
+    u.searchParams.delete('page');
+    return u.pathname + u.search;
+  }
+  // 전체 로드 결과를 세션 스토리지에 파싱 데이터로 저장 (전체 HTML은 용량 초과라 텍스트 정보만 저장, 3000건 상한)
+  function saveWholeCache() {
+    try {
+      const list = cards().filter(c => !c.dataset.srDup).map(c => ({
+        id: c.dataset.srId || ((c.getAttribute('href') || '').match(/rec_idx=(\d+)/) || [])[1] || '',
+        title: c.dataset.srTitle || '',
+        loc: c.dataset.srLoc || '',
+        corp: c.dataset.srCorp || '',
+        deadline: c.dataset.srDeadline || '',
+        isNew: c.dataset.srNew === '1'
+      })).filter(cd => cd.id);
+      if (list.length && list.length <= 3000) {
+        sessionStorage.setItem('srWhole', JSON.stringify({ key: searchKey(), ts: Date.now(), cards: list }));
+      }
+    } catch (e) {}
+  }
+  // 뒤로가기로 완전 새로고침된 경우: 캐시에서 없는 공고만 본 목록에 다시 만들어 넣어 복원 (30분 이내·같은 검색만)
+  function restoreWhole() {
+    let data;
+    try { data = JSON.parse(sessionStorage.getItem('srWhole') || 'null'); } catch (e) { return false; }
+    if (!data || data.key !== searchKey()) return false;
+    if (Date.now() - data.ts > 30 * 60 * 1000) return false;
+    const root = document.getElementById('recruit_result');
+    if (!root || !Array.isArray(data.cards) || !data.cards.length) return false;
+    const have = new Set(cards().map(c => c.dataset.srId || ((c.getAttribute('href') || '').match(/rec_idx=(\d+)/) || [])[1]).filter(Boolean));
+    const frag = document.createDocumentFragment();
+    let added = 0;
+    data.cards.forEach(cd => {
+      if (!cd.id || have.has(cd.id)) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'recruit_container list_link recruit sr-rebuilt';
+      wrap.innerHTML = '<a class="link" href="/job-search/view?rec_idx=' + cd.id + '"><div class=" list">'
+        + (cd.isNew ? '<span class="badge hot">오늘 뜬</span>' : '')
+        + '<p class="tit"></p><div class="meta"><span></span></div>'
+        + '<div class="corp"><span class="corp_name"></span></div>'
+        + '<div class="applicant"><span class="date"></span></div></div></a>';
+      wrap.querySelector('.tit').textContent = cd.title || '';
+      wrap.querySelector('.meta span').textContent = cd.loc || '';
+      wrap.querySelector('.corp_name').textContent = cd.corp || '';
+      wrap.querySelector('.date').textContent = cd.deadline || '';
+      frag.appendChild(wrap); added++;
+    });
+    if (!added) return false;
+    root.appendChild(frag);
+    return true;
+  }
 
   // 전체 로드: 사람인 목록 API(/search/get-recruit-list, 페이지당 30건)로 남은 페이지를 가져와 본 목록에 이어붙임
   async function loadAll(btn) {
@@ -303,14 +356,21 @@
     wholeLoaded = true;
     wholeLoadedCount = cards().length;
     organize();
+    saveWholeCache();
     if (failed) alert('전체 로드 완료 (실패 ' + failed + '페이지 제외)');
   }
 
   const JOB_SEL = 'a[href^="/job-search/view?rec_idx="]';
   function cards() {
-    // 본 목록(#recruit_result)만 대상으로 함 — 테마/유사/최근본 등 다른 섹션의 공고 링크가 섞여 개수가 부풀려지는 것을 방지
+    // 본 목록(#recruit_result) + 이미 그룹으로 옮긴 카드가 대상.
+    // 그룹 카드는 #recruit_result 밖에 있으므로, 뒤로가기 시 목록이 1페이지로 다시 그려져도
+    // 그룹에 남아 있는 전체 로드분이 다음 organize에서 사라지지 않음.
+    // 테마/유사/최근본 등 본 목록 밖 섹션은 groupsEl에도 없으므로 여전히 제외됨.
     const root = document.getElementById('recruit_result');
-    return [...(root || document).querySelectorAll(JOB_SEL)];
+    const inList = root ? [...root.querySelectorAll(JOB_SEL)] : [...document.querySelectorAll(JOB_SEL)];
+    const inGroups = groupsEl ? [...groupsEl.querySelectorAll(JOB_SEL)] : [];
+    const seen = new Set();
+    return [...inList, ...inGroups].filter(c => { if (seen.has(c)) return false; seen.add(c); return true; });
   }
   function totalCount() {
     const m = document.body.textContent.match(/총\s*([\d,]+)건/);
@@ -498,6 +558,15 @@
       blocked = next.split(',').map(s => s.trim()).filter(Boolean);
       save(blocked); organize();
     });
+    // 뒤로가기 복원: 목록이 있으면 한 번만 시도 (캐시가 현재 검색과 일치하고 목록보다 많을 때 복원)
+    if (!wholeLoaded && !restoreAttempted && uniq.length > 0) {
+      restoreAttempted = true;
+      if (restoreWhole()) {
+        wholeLoaded = true;
+        organize();
+        wholeLoadedCount = cards().length;
+      }
+    }
   }
 
   let timer = null;
