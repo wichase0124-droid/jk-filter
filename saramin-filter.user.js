@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.3
+// @version      1.0.4
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -9,7 +9,7 @@
 // @downloadURL  https://cdn.jsdelivr.net/gh/wichase0124-droid/jk-filter@main/saramin-filter.user.js
 // ==/UserScript==
 
-// SR 필터 v1.0.3 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그
+// SR 필터 v1.0.4 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 + 전체 로드
 // v1.0.3: 실기기 '지역 미상 50건' 수정 — 지역이 링크 밖 래퍼에 있거나, 잎 요소로 쪼개지거나,
 // '경기도/서울특별시' 같은 정식 명칭인 경우에도 지역을 찾도록 파싱 범위를 래퍼까지 넓히고 토큰 결합·정식명칭 정규화를 추가
 // 잡코리아 필터와 별도 스크립트 (사이트 구조·식별자 체계가 다름). 지원내역 동기화는 지원내역 주소 확인 후 추가 예정.
@@ -137,6 +137,22 @@
     const href = card.getAttribute('href') || '';
     const m = href.match(/rec_idx=(\d+)/);
     const id = m ? m[1] : '';
+    // 실측 클래스 우선 (.tit / .meta 첫 span / .corp_name / .date / .badge) — 없으면 텍스트 휴리스틱 폴백
+    const clsTitle = card.querySelector('.tit');
+    const clsMeta = card.querySelector('.meta span');
+    const clsCorp = card.querySelector('.corp_name');
+    const clsDate = card.querySelector('.date');
+    const clsBadge = card.querySelector('.badge');
+    if (clsMeta || clsCorp) {
+      return {
+        id,
+        title: clsTitle ? clsTitle.textContent.trim() : '',
+        corp: clsCorp ? clsCorp.textContent.trim() : '',
+        loc: clsMeta ? clsMeta.textContent.trim() : '',
+        deadline: clsDate ? clsDate.textContent.trim() : '',
+        isNew: clsBadge ? /오늘 뜬/.test(clsBadge.textContent) : /오늘 뜬/.test(card.textContent || '')
+      };
+    }
     const lines = mergeRegionLines(textLines(parseScope(card)));
     // 실기기 확인: 지역이 단독 잎 요소인 경우가 많아 '·' 포함을 요구하지 않음
     let regIdx = -1, loc = '';
@@ -185,13 +201,21 @@
   }
   // 정식 명칭('서울특별시', '경기도', '충청북도' 등)을 DIST 키의 약칭('서울', '경기', '충북')으로 정규화
   function normalizeRegion(loc) {
-    return (loc || '')
+    let s = (loc || '')
       .replace(/서울특별시/g, '서울').replace(/부산광역시/g, '부산').replace(/대구광역시/g, '대구')
       .replace(/인천광역시/g, '인천').replace(/광주광역시/g, '광주').replace(/대전광역시/g, '대전')
       .replace(/울산광역시/g, '울산').replace(/세종특별자치시/g, '세종').replace(/경기도/g, '경기')
       .replace(/강원특별자치도/g, '강원').replace(/충청북도/g, '충북').replace(/충청남도/g, '충남')
       .replace(/전라북도/g, '전북').replace(/전라남도/g, '전남').replace(/경상북도/g, '경북')
       .replace(/경상남도/g, '경남').replace(/제주특별자치도/g, '제주');
+    // '서울시' 등 단축 시 표기
+    s = s.replace(/서울시/g, '서울').replace(/부산시/g, '부산').replace(/대구시/g, '대구')
+      .replace(/인천시/g, '인천').replace(/광주시/g, '광주').replace(/대전시/g, '대전').replace(/울산시/g, '울산');
+    // '전남광주 동구'처럼 광역시 앞에 권역이 붙은 표기는 권역을 떼고 매칭
+    // (한글은 \w가 아니라 \b 경계가 동작하지 않으므로 공백·끝 경계로 검사)
+    const pm = s.match(/^(전남|전북|충남|충북|경남|경북|강원)\s*(광주|부산|대구|인천|대전|울산|서울|세종|제주|경기)(?=\s|$)/);
+    if (pm) s = s.slice(pm[1].length).trim();
+    return s;
   }
   function bandOf(loc) {
     if (!loc) return { band: 'unknown', km: null, disp: loc || '' };
@@ -240,9 +264,53 @@
   let cleanMode = getLS('srClean', true);
   let bandOpen = getLS('srBandOpen', { b5: true, b10: true, b20: true, b40: false, over: false, unknown: false });
   let groupsEl = null, badgeEl = null;
+  let wholeLoaded = false, wholeLoadedCount = 0, wholeLoading = false;
 
+  // 전체 로드: 사람인 목록 API(/search/get-recruit-list, 페이지당 30건)로 남은 페이지를 가져와 본 목록에 이어붙임
+  async function loadAll(btn) {
+    const root = document.getElementById('recruit_result');
+    if (!root || wholeLoading) return;
+    const total = parseInt((totalCount() || '0').replace(/,/g, ''), 10) || 0;
+    const pageSize = cards().length || 30;
+    const pages = total && pageSize ? Math.ceil(total / pageSize) : 0;
+    if (!pages || pages < 2) return;
+    if (!confirm('전체 ' + total.toLocaleString() + '건(' + pages + '페이지)을 불러옵니다. 데이터 사용량이 클 수 있습니다. 계속할까요?')) return;
+    wholeLoading = true;
+    let done = 0, failed = 0;
+    const setProgress = () => { if (btn) btn.textContent = '불러오는 중 (' + done + '/' + (pages - 1) + ')'; };
+    setProgress();
+    const fetchPage = async n => {
+      const u = new URL(location.href);
+      u.searchParams.set('page', String(n));
+      try {
+        const res = await fetch('/search/get-recruit-list' + u.search, { credentials: 'same-origin' });
+        const data = await res.json();
+        if (data && data.innerHTML) {
+          const tmp = document.createElement('div');
+          tmp.innerHTML = data.innerHTML;
+          while (tmp.firstChild) root.appendChild(tmp.firstChild);
+        }
+      } catch (e) { failed++; }
+      done++; setProgress();
+    };
+    const queue = [];
+    for (let n = 2; n <= pages; n++) queue.push(n);
+    const workers = [0, 1, 2].map(async () => {
+      while (queue.length) { const n = queue.shift(); await fetchPage(n); }
+    });
+    await Promise.all(workers);
+    wholeLoading = false;
+    wholeLoaded = true;
+    wholeLoadedCount = cards().length;
+    organize();
+    if (failed) alert('전체 로드 완료 (실패 ' + failed + '페이지 제외)');
+  }
+
+  const JOB_SEL = 'a[href^="/job-search/view?rec_idx="]';
   function cards() {
-    return [...document.querySelectorAll('a[href^="/job-search/view?rec_idx="]')];
+    // 본 목록(#recruit_result)만 대상으로 함 — 테마/유사/최근본 등 다른 섹션의 공고 링크가 섞여 개수가 부풀려지는 것을 방지
+    const root = document.getElementById('recruit_result');
+    return [...(root || document).querySelectorAll(JOB_SEL)];
   }
   function totalCount() {
     const m = document.body.textContent.match(/총\s*([\d,]+)건/);
@@ -342,6 +410,8 @@
       else if (rid) seen.add(rid);
     });
     const uniq = all.filter(c => !c.dataset.srDup);
+    // 페이지 이동으로 목록이 교체되면 전체 로드 상태 해제
+    if (wholeLoaded && uniq.length < wholeLoadedCount) { wholeLoaded = false; wholeLoadedCount = 0; }
     const listContainer = unitOf(uniq[0]).parentElement;
     if (!groupsEl) {
       groupsEl = document.createElement('div');
@@ -413,9 +483,12 @@
     }
     badgeEl.innerHTML = '';
     const txt = document.createElement('div');
-    txt.textContent = '전체 ' + totalCount() + ' · 로드 ' + uniq.length + ' · 차단 ' + blockedN + ' · 표시 ' + shown + ' · 기준 ' + BASE.name;
+    txt.textContent = '전체 ' + totalCount() + ' · 로드 ' + uniq.length + ' · 차단 ' + blockedN + ' · 표시 ' + shown + ' · 기준 ' + BASE.name + (wholeLoaded ? ' · 전체 로드됨' : '');
     badgeEl.appendChild(txt);
-    const mkBtn = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.addEventListener('click', fn); badgeEl.appendChild(b); };
+    const mkBtn = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.addEventListener('click', fn); badgeEl.appendChild(b); return b; };
+    if (!wholeLoaded && document.getElementById('recruit_result')) {
+      mkBtn('전체 불러오기', ev => loadAll(ev.currentTarget));
+    }
     mkBtn(sortDir === 'desc' ? '오래된순' : '최신순', () => { sortDir = sortDir === 'desc' ? 'asc' : 'desc'; setLS('srSortDir', sortDir); organize(); });
     mkBtn(cleanMode ? '클린 해제' : '클린 적용', () => { cleanMode = !cleanMode; setLS('srClean', cleanMode); organize(); });
     mkBtn('목록편집', () => {
