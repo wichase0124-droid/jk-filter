@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.0
+// @version      1.0.1
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -9,7 +9,7 @@
 // @downloadURL  https://cdn.jsdelivr.net/gh/wichase0124-droid/jk-filter@main/saramin-filter.user.js
 // ==/UserScript==
 
-// SR 필터 v1.0.0 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그
+// SR 필터 v1.0.1 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그
 // 잡코리아 필터와 별도 스크립트 (사이트 구조·식별자 체계가 다름). 지원내역 동기화는 지원내역 주소 확인 후 추가 예정.
 (() => {
   if (window.__srFilter) return;
@@ -235,26 +235,46 @@
   function organize() {
     const all = cards();
     if (!all.length) return;
-    const listParent = all[0].parentElement;
+    // 이동 단위: 카드 링크 하나만 담은 래퍼(스크랩/입사지원 버튼 포함)는 래퍼째 이동해 버튼이 고아로 남지 않게 함
+    // 그룹으로 옮긴 뒤에는 부모가 그룹 본문이 되므로, 래퍼에 sr-unit 표시를 남겨 재계산해도 같은 단위를 찾음
+    const unitOf = card => {
+      const p = card.parentElement;
+      if (p && p.classList.contains('sr-unit')) return p;
+      if (p && p.querySelectorAll('a[href^="/job-search/view?rec_idx="]').length === 1) { p.classList.add('sr-unit'); return p; }
+      return card;
+    };
+    // rec_idx 중복 제거 (페이지 경계에서 같은 공고가 겹쳐 보이는 경우 뒤쪽 중복 단위 숨김)
+    const seen = new Set();
+    all.forEach(c => {
+      const rid = c.dataset.srId || ((c.getAttribute('href') || '').match(/rec_idx=(\d+)/) || [])[1] || '';
+      if (rid && seen.has(rid)) { unitOf(c).style.display = 'none'; c.dataset.srDup = '1'; }
+      else if (rid) seen.add(rid);
+    });
+    const uniq = all.filter(c => !c.dataset.srDup);
+    const listContainer = unitOf(uniq[0]).parentElement;
     if (!groupsEl) {
       groupsEl = document.createElement('div');
       groupsEl.id = 'srGroups';
-      listParent.parentElement.insertBefore(groupsEl, listParent);
+    }
+    // 목록 영역이 재렌더링돼 그룹 컨테이너가 떨어졌으면 현재 목록 앞에 다시 붙임
+    if (!groupsEl.isConnected) {
+      if (listContainer && listContainer.parentElement) listContainer.parentElement.insertBefore(groupsEl, listContainer);
+      else uniq[0].parentElement.insertBefore(groupsEl, uniq[0]);
     }
     // 원본에서 한 번 파싱(applyCard)한 뒤 클린 적용/원복 — 클린된 카드를 다시 파싱하지 않음
-    all.forEach(c => { if (!c.dataset.srDone) applyCard(c); });
-    all.forEach(c => { if (cleanMode) cleanCard(c); else restoreCard(c); });
-    const fresh = cards();
-    // 차단 집계 + 밴드 분류 (dataset 기준)
+    uniq.forEach(c => { if (!c.dataset.srDone) applyCard(c); });
+    uniq.forEach(c => { if (cleanMode) cleanCard(c); else restoreCard(c); });
+    // 차단 집계 + 밴드 분류 (dataset 기준, 이동은 단위 기준)
     let blockedN = 0, shown = 0;
     const byBand = {}; BANDS.forEach(b => byBand[b.id] = []);
-    fresh.forEach(card => {
+    uniq.forEach(card => {
+      const unit = unitOf(card);
       const corp = card.dataset.srCorp || '';
-      if (isBlocked(corp)) { blockedN++; card.style.display = 'none'; return; }
-      card.style.display = '';
+      if (isBlocked(corp)) { blockedN++; unit.style.display = 'none'; return; }
+      unit.style.display = '';
       shown++;
       const b = bandOf(card.dataset.srLoc || '');
-      byBand[b.band].push(card);
+      byBand[b.band].push(unit);
     });
     // 그룹 렌더링
     groupsEl.innerHTML = '';
@@ -285,7 +305,7 @@
     }
     badgeEl.innerHTML = '';
     const txt = document.createElement('div');
-    txt.textContent = '전체 ' + totalCount() + ' · 로드 ' + fresh.length + ' · 차단 ' + blockedN + ' · 표시 ' + shown + ' · 기준 ' + BASE.name;
+    txt.textContent = '전체 ' + totalCount() + ' · 로드 ' + uniq.length + ' · 차단 ' + blockedN + ' · 표시 ' + shown + ' · 기준 ' + BASE.name;
     badgeEl.appendChild(txt);
     const mkBtn = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.addEventListener('click', fn); badgeEl.appendChild(b); };
     mkBtn(sortDir === 'desc' ? '오래된순' : '최신순', () => { sortDir = sortDir === 'desc' ? 'asc' : 'desc'; setLS('srSortDir', sortDir); organize(); });
