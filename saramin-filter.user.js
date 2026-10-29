@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.1
+// @version      1.0.2
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -9,7 +9,7 @@
 // @downloadURL  https://cdn.jsdelivr.net/gh/wichase0124-droid/jk-filter@main/saramin-filter.user.js
 // ==/UserScript==
 
-// SR 필터 v1.0.1 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그
+// SR 필터 v1.0.2 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그
 // 잡코리아 필터와 별도 스크립트 (사이트 구조·식별자 체계가 다름). 지원내역 동기화는 지원내역 주소 확인 후 추가 예정.
 (() => {
   if (window.__srFilter) return;
@@ -89,25 +89,36 @@
   const BADGE = /^(오늘 뜬|HOT|NEW|추천|긴급)$/;
   const DEADLINE = /^(~|D-|D\+|내일마감|오늘마감|상시채용|진행예정|채용시|마감)/;
   const REGION = /서울|경기|인천|부산|대구|광주|대전|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주|전국|재택/;
+  const REGION_START = /^(서울|경기|인천|부산|대구|광주|대전|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주|전국|재택|해외)/;
+  // 지역·조건 줄 뒤에 오는 조건 토큰(경력·학력·근무형태)은 회사명이 아니므로 건너뜀
+  const COND_TOKEN = /^(경력|학력|초대졸|대졸|고졸|석사|박사|학력무관|경력무관|신입|정규직|계약직|인턴|파견|프리랜서|아르바이트|도급|위촉|병역)/;
+  const JUNK_LINE = /^(기업이미지|이미지|스크랩|입사지원)$/;
   function parseCard(card) {
     const href = card.getAttribute('href') || '';
     const m = href.match(/rec_idx=(\d+)/);
     const id = m ? m[1] : '';
     const lines = textLines(card);
-    let condIdx = -1, loc = '';
+    // 실기기 확인: 지역이 단독 잎 요소인 경우가 많아 '·' 포함을 요구하지 않음
+    let regIdx = -1, loc = '';
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].includes('·') && REGION.test(lines[i])) { condIdx = i; loc = lines[i].split('·')[0].trim(); break; }
+      if (REGION_START.test(lines[i])) { regIdx = i; loc = lines[i].split('·')[0].trim(); break; }
+    }
+    if (regIdx < 0) {
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes('·') && REGION.test(lines[i])) { regIdx = i; loc = lines[i].split('·')[0].trim(); break; }
+      }
     }
     let title = '', corp = '', deadline = '';
-    if (condIdx >= 0) {
-      for (let i = condIdx - 1; i >= 0; i--) { if (!BADGE.test(lines[i])) { title = lines[i]; break; } }
-      for (let i = condIdx + 1; i < lines.length; i++) {
-        if (DEADLINE.test(lines[i])) { deadline = lines[i]; break; }
-        if (!corp) corp = lines[i];
+    if (regIdx >= 0) {
+      for (let i = regIdx - 1; i >= 0; i--) { if (!BADGE.test(lines[i]) && !JUNK_LINE.test(lines[i])) { title = lines[i]; break; } }
+      for (let i = regIdx + 1; i < lines.length; i++) {
+        const l = lines[i];
+        if (DEADLINE.test(l)) { deadline = l; continue; } // 마감일은 마지막 표기를 취함
+        if (JUNK_LINE.test(l) || COND_TOKEN.test(l)) continue;
+        if (!corp) corp = l;
       }
-      if (!deadline) { const dl = lines.slice(condIdx + 1).find(l => DEADLINE.test(l)); if (dl) deadline = dl; }
     } else {
-      title = lines.find(l => !BADGE.test(l)) || '';
+      title = lines.find(l => !BADGE.test(l) && !JUNK_LINE.test(l)) || '';
     }
     const isNew = /오늘 뜬/.test(card.textContent || '');
     return { id, title, corp, loc, deadline, isNew };
@@ -127,6 +138,11 @@
       const parts = loc.split(/\s+/);
       if (parts.length >= 2) coord = DIST[(parts[0] + parts[1]).replace(/시$/,'시')] || DIST[parts[0]];
       else coord = DIST[parts[0]];
+    }
+    if (!coord) {
+      // '용산구'처럼 구만 표기된 경우: DIST 키 중 해당 접미사가 유일하면 그 좌표 사용
+      const cands = Object.keys(DIST).filter(k => k.endsWith(key));
+      if (cands.length === 1) coord = DIST[cands[0]];
     }
     if (!coord) return { band: 'unknown', km: null, disp: loc };
     const km = distKm(BASE.coord, coord);
@@ -235,13 +251,23 @@
   function organize() {
     const all = cards();
     if (!all.length) return;
-    // 이동 단위: 카드 링크 하나만 담은 래퍼(스크랩/입사지원 버튼 포함)는 래퍼째 이동해 버튼이 고아로 남지 않게 함
+    // 이동 단위: 카드 링크 하나만 담은 가장 바깥 래퍼(스크랩/입사지원 버튼 포함)까지 올라가 래퍼째 이동
+    // (링크 직계 부모가 안쪽 div인 경우 직계만 옮기면 버튼이 고아로 남음)
     // 그룹으로 옮긴 뒤에는 부모가 그룹 본문이 되므로, 래퍼에 sr-unit 표시를 남겨 재계산해도 같은 단위를 찾음
     const unitOf = card => {
-      const p = card.parentElement;
-      if (p && p.classList.contains('sr-unit')) return p;
-      if (p && p.querySelectorAll('a[href^="/job-search/view?rec_idx="]').length === 1) { p.classList.add('sr-unit'); return p; }
-      return card;
+      // 이미 그룹 안에 있으면 sr-unit 래퍼를 그대로 반환 (밴드 본문·섹션을 단위로 오인하지 않음)
+      let q = card.parentElement;
+      while (q && q !== document.body) {
+        if (q.classList.contains('sr-unit')) return q;
+        if (q.id === 'srGroups' || q.classList.contains('sr-band-body') || q.classList.contains('sr-band')) break;
+        q = q.parentElement;
+      }
+      let unit = card, p = card.parentElement, depth = 0;
+      while (p && p !== document.body && depth < 4 && p.id !== 'srGroups' && !p.classList.contains('sr-band') && !p.classList.contains('sr-band-body') && p.querySelectorAll('a[href^="/job-search/view?rec_idx="]').length === 1 && !p.querySelector('input,select,form')) {
+        unit = p; p = p.parentElement; depth++;
+      }
+      if (unit !== card) unit.classList.add('sr-unit');
+      return unit;
     };
     // rec_idx 중복 제거 (페이지 경계에서 같은 공고가 겹쳐 보이는 경우 뒤쪽 중복 단위 숨김)
     const seen = new Set();
@@ -274,7 +300,7 @@
       unit.style.display = '';
       shown++;
       const b = bandOf(card.dataset.srLoc || '');
-      byBand[b.band].push(unit);
+      byBand[b.band].push({ card, unit });
     });
     // 그룹 렌더링
     groupsEl.innerHTML = '';
@@ -293,7 +319,24 @@
       const body = document.createElement('div');
       body.className = 'sr-band-body';
       body.style.display = bandOpen[b.id] ? '' : 'none';
-      list.forEach(c => body.appendChild(c));
+      list.forEach(({ card, unit }) => {
+        // 래퍼가 없는 평탄 구조면 링크 뒤의 스크랩/입사지원 버튼 형제도 함께 이동
+        let extras = [];
+        if (unit === card) {
+          let sib = card.nextSibling;
+          while (sib) {
+            if (sib.nodeType === 1 && sib.matches && sib.matches('a[href^="/job-search/view?rec_idx="]')) break;
+            if (sib.nodeType === 1) {
+              const t = (sib.textContent || '').trim();
+              if (sib.tagName === 'BUTTON' || /스크랩|입사지원/.test(t)) extras.push(sib);
+              else break;
+            }
+            sib = sib.nextSibling;
+          }
+        }
+        body.appendChild(unit);
+        extras.forEach(e => body.appendChild(e));
+      });
       sec.appendChild(body);
       groupsEl.appendChild(sec);
     });
