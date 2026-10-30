@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.6
+// @version      1.0.7
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -9,7 +9,7 @@
 // @downloadURL  https://cdn.jsdelivr.net/gh/wichase0124-droid/jk-filter@main/saramin-filter.user.js
 // ==/UserScript==
 
-// SR 필터 v1.0.6 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 + 전체 로드 + 뒤로가기 복원 + 새 탭 열기
+// SR 필터 v1.0.7 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 + 전체 로드 + 뒤로가기 복원 + 새 탭 열기 + 제목 2줄 제한
 // v1.0.3: 실기기 '지역 미상 50건' 수정 — 지역이 링크 밖 래퍼에 있거나, 잎 요소로 쪼개지거나,
 // '경기도/서울특별시' 같은 정식 명칭인 경우에도 지역을 찾도록 파싱 범위를 래퍼까지 넓히고 토큰 결합·정식명칭 정규화를 추가
 // 잡코리아 필터와 별도 스크립트 (사이트 구조·식별자 체계가 다름). 지원내역 동기화는 지원내역 주소 확인 후 추가 예정.
@@ -252,10 +252,11 @@
     .sr-new { border-left: 4px solid #f97316 !important; padding-left: 6px !important; }
     .sr-tag { display: inline-block; font-size: 11px; line-height: 1.4; padding: 1px 6px; border-radius: 10px; margin: 2px 4px 2px 0; }
     .sr-tag-read { background: #e5e7eb; color: #374151; }
-    .sr-chip { position: absolute; top: 6px; right: 6px; z-index: 5; font-size: 11px; color: #dc2626; background: #fff; border: 1px solid #dc2626; border-radius: 10px; padding: 1px 7px; cursor: pointer; }
+    .sr-chip { position: absolute; top: 6px; right: 6px; z-index: 5; font-size: 11px; color: #dc2626; background: #fff; border: 1px solid #dc2626; border-radius: 10px; padding: 1px 7px; cursor: pointer; white-space: nowrap; }
     .sr-badge { position: fixed; right: 12px; bottom: 12px; z-index: 9999; background: #FFD60A; color: #000; border: 2px solid #000; border-radius: 12px; padding: 8px 10px; font-size: 12px; line-height: 1.5; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
     .sr-badge button { margin: 2px; font-size: 12px; }
-    .sr-clean-title { font-size: 15px; font-weight: 700; line-height: 1.4; margin-bottom: 2px; }
+    /* 제목은 2줄까지만 표시하고 칩 자리(우측 56px)를 비워둠 — 긴 제목이 칩 아래로 흘러가거나 칩이 개행되는 것을 방지 */
+    .sr-clean-title { font-size: 15px; font-weight: 700; line-height: 1.4; margin-bottom: 2px; padding-right: 56px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .sr-clean-meta { font-size: 12px; color: #555; line-height: 1.4; }
     /* 클린 모드에서는 카드 옆 스크랩 별·입사지원 버튼을 숨김 (제목 아래로 떨어져 개행을 깨뜨림) */
     .sr-clean-unit .wrap_scrap_btn, .sr-clean-unit button:not(.sr-chip) { display: none !important; }
