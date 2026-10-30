@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.5
+// @version      1.0.6
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -9,7 +9,7 @@
 // @downloadURL  https://cdn.jsdelivr.net/gh/wichase0124-droid/jk-filter@main/saramin-filter.user.js
 // ==/UserScript==
 
-// SR 필터 v1.0.5 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 + 전체 로드 + 뒤로가기 복원
+// SR 필터 v1.0.6 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 + 전체 로드 + 뒤로가기 복원 + 새 탭 열기
 // v1.0.3: 실기기 '지역 미상 50건' 수정 — 지역이 링크 밖 래퍼에 있거나, 잎 요소로 쪼개지거나,
 // '경기도/서울특별시' 같은 정식 명칭인 경우에도 지역을 찾도록 파싱 범위를 래퍼까지 넓히고 토큰 결합·정식명칭 정규화를 추가
 // 잡코리아 필터와 별도 스크립트 (사이트 구조·식별자 체계가 다름). 지원내역 동기화는 지원내역 주소 확인 후 추가 예정.
@@ -99,7 +99,7 @@
   // (실기기에서 지역·회사명이 링크 형제 요소에 있는 경우 링크만 파싱하면 지역이 전부 미상이 됨)
   function parseScope(card) {
     let scope = card, p = card.parentElement, depth = 0;
-    while (p && p !== document.body && depth < 4 && p.querySelectorAll('a[href^="/job-search/view?rec_idx="]').length === 1 && !p.querySelector('input,select,form')) {
+    while (p && p !== document.body && depth < 4 && p.querySelectorAll('a[href^="/job-search/view?rec_idx="]').length === 1 && !p.querySelector('form,select')) {
       scope = p; p = p.parentElement; depth++;
     }
     return scope;
@@ -257,6 +257,8 @@
     .sr-badge button { margin: 2px; font-size: 12px; }
     .sr-clean-title { font-size: 15px; font-weight: 700; line-height: 1.4; margin-bottom: 2px; }
     .sr-clean-meta { font-size: 12px; color: #555; line-height: 1.4; }
+    /* 클린 모드에서는 카드 옆 스크랩 별·입사지원 버튼을 숨김 (제목 아래로 떨어져 개행을 깨뜨림) */
+    .sr-clean-unit .wrap_scrap_btn, .sr-clean-unit button:not(.sr-chip) { display: none !important; }
   `;
   document.head.appendChild(style);
 
@@ -381,6 +383,9 @@
     if (card.dataset.srDone) return;
     card.dataset.srDone = '1';
     card.classList.add('sr-card');
+    // 상세페이지는 항상 새 탭으로 (같은 탭에서 열면 전체 불러오기가 날아감)
+    card.target = '_blank';
+    card.rel = 'noopener';
     if (!card.dataset.srOrig) card.dataset.srOrig = card.innerHTML; // 칩/태그 추가 전 원본 보관
     const info = parseCard(card); // 원본 HTML에서 한 번만 파싱해 dataset에 저장 (클린 후 재파싱 방지)
     card.dataset.srId = info.id;
@@ -417,6 +422,8 @@
     const loc = card.dataset.srLoc || '', corp = card.dataset.srCorp || '';
     const title = card.dataset.srTitle || '', deadline = card.dataset.srDeadline || '';
     card.dataset.srCleaned = '1';
+    const unitEl = card.closest('.recruit_container');
+    if (unitEl) unitEl.classList.add('sr-clean-unit');
     const b = bandOf(loc);
     const meta = '📍 ' + (b.km !== null ? '약 ' + b.km.toFixed(1) + 'km · ' : '') + b.disp + (corp ? ' · ' + corp : '') + (deadline ? ' · ' + deadline : '');
     card.innerHTML = '';
@@ -438,6 +445,8 @@
     if (card.dataset.srCleaned) {
       card.innerHTML = card.dataset.srOrig || card.innerHTML;
       delete card.dataset.srCleaned; delete card.dataset.srDone;
+      const unitEl = card.closest('.recruit_container');
+      if (unitEl) unitEl.classList.remove('sr-clean-unit');
     }
   }
 
@@ -456,7 +465,7 @@
         q = q.parentElement;
       }
       let unit = card, p = card.parentElement, depth = 0;
-      while (p && p !== document.body && depth < 4 && p.id !== 'srGroups' && !p.classList.contains('sr-band') && !p.classList.contains('sr-band-body') && p.querySelectorAll('a[href^="/job-search/view?rec_idx="]').length === 1 && !p.querySelector('input,select,form')) {
+      while (p && p !== document.body && depth < 4 && p.id !== 'srGroups' && !p.classList.contains('sr-band') && !p.classList.contains('sr-band-body') && p.querySelectorAll('a[href^="/job-search/view?rec_idx="]').length === 1 && !p.querySelector('form,select')) {
         unit = p; p = p.parentElement; depth++;
       }
       if (unit !== card) unit.classList.add('sr-unit');
