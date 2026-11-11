@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.7
+// @version      1.0.8
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -9,7 +9,7 @@
 // @downloadURL  https://cdn.jsdelivr.net/gh/wichase0124-droid/jk-filter@main/saramin-filter.user.js
 // ==/UserScript==
 
-// SR 필터 v1.0.7 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 + 전체 로드 + 뒤로가기 복원 + 새 탭 열기 + 제목 2줄 제한
+// SR 필터 v1.0.8 - 사람인 모바일 검색: 업체 차단 + 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 + 전체 로드 + 뒤로가기 복원(기한 없음) + 새 탭 열기 + 제목 2줄 제한
 // v1.0.3: 실기기 '지역 미상 50건' 수정 — 지역이 링크 밖 래퍼에 있거나, 잎 요소로 쪼개지거나,
 // '경기도/서울특별시' 같은 정식 명칭인 경우에도 지역을 찾도록 파싱 범위를 래퍼까지 넓히고 토큰 결합·정식명칭 정규화를 추가
 // 잡코리아 필터와 별도 스크립트 (사이트 구조·식별자 체계가 다름). 지원내역 동기화는 지원내역 주소 확인 후 추가 예정.
@@ -291,12 +291,13 @@
       }
     } catch (e) {}
   }
-  // 뒤로가기로 완전 새로고침된 경우: 캐시에서 없는 공고만 본 목록에 다시 만들어 넣어 복원 (30분 이내·같은 검색만)
+  // 뒤로가기로 완전 새로고침된 경우: 캐시에서 없는 공고만 본 목록에 다시 만들어 넣어 복원 (같은 검색만)
+  // 유효기간 없음 — 세션 스토리지는 탭을 닫으면 사라지므로 탭 수명이 곧 유효기간. 오래된 캐시는
+  // 새 1페이지 목록과 합쳐지고(중복 제거) 마감된 공고는 다음 전체 불러오기 때 정리됨.
   function restoreWhole() {
     let data;
     try { data = JSON.parse(sessionStorage.getItem('srWhole') || 'null'); } catch (e) { return false; }
     if (!data || data.key !== searchKey()) return false;
-    if (Date.now() - data.ts > 30 * 60 * 1000) return false;
     const root = document.getElementById('recruit_result');
     if (!root || !Array.isArray(data.cards) || !data.cards.length) return false;
     const have = new Set(cards().map(c => c.dataset.srId || ((c.getAttribute('href') || '').match(/rec_idx=(\d+)/) || [])[1]).filter(Boolean));
@@ -585,6 +586,8 @@
   mo.observe(document.body, { childList: true, subtree: true });
   ['pageshow', 'focus', 'visibilitychange', 'popstate'].forEach(ev =>
     window.addEventListener(ev, () => { readIds = new Set(getLS('srReadIds', [])); schedule(); }));
+  // 전체 로드 도중 페이지를 떠나면 지금까지 불러온 분이라도 캐시에 저장 (돌아왔을 때 복원용)
+  window.addEventListener('pagehide', () => { if (wholeLoading) saveWholeCache(); });
   // 목록이 비동기로 렌더링되므로 첫 카드 등장까지 폴링
   let tries = 0;
   const iv = setInterval(() => {
