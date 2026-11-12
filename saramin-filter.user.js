@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.9
+// @version      1.0.11
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -268,6 +268,7 @@
   let bandOpen = getLS('srBandOpen', { b5: true, b10: true, b20: true, b40: false, over: false, unknown: false });
   let groupsEl = null, badgeEl = null;
   let wholeLoaded = false, wholeLoadedCount = 0, wholeLoading = false, restoreAttempted = false;
+  let organizing = false; // organize 재진입 방지: 스냅샷 기준으로 그룹을 다시 그리는 도중 겹쳐 실행되면 카드가 소실될 수 있음
 
   // 검색 식별자 (page 파라미터 제외) — 전체 로드 캐시의 검색 일치 판정용
   // ajax 파라미터도 제외: 공고 카드 클릭 시 Recruit.js가 pushState로 '&ajax=none'을 붙이고,
@@ -291,7 +292,14 @@
         isNew: c.dataset.srNew === '1'
       })).filter(cd => cd.id);
       if (list.length && list.length <= 3000) {
-        sessionStorage.setItem('srWhole', JSON.stringify({ key: searchKey(), ts: Date.now(), cards: list }));
+        // 기존 캐시와 합집합: DOM에서 잠시 빠진 카드(예: 클릭 직후 그룹 재렌더링 중 소실)가
+        // 캐시에서 사라지면 뒤로가기 복원으로도 돌아오지 않음. 같은 검색의 기존 항목은 유지.
+        let prev = [];
+        try { const d = JSON.parse(sessionStorage.getItem('srWhole') || 'null'); if (d && d.key === searchKey() && Array.isArray(d.cards)) prev = d.cards; } catch (e) {}
+        const seenIds = new Set(list.map(c => c.id));
+        const merged = list.concat(prev.filter(c => c && c.id && !seenIds.has(c.id)));
+        const finalList = merged.length <= 3000 ? merged : list;
+        sessionStorage.setItem('srWhole', JSON.stringify({ key: searchKey(), ts: Date.now(), cards: finalList }));
       }
     } catch (e) {}
   }
@@ -413,7 +421,7 @@
     });
     card.appendChild(chip);
     // 읽음 기록 (캡처 단계에서 먼저 기록)
-    card.addEventListener('click', () => { if (info.id) markRead(info.id); }, true);
+    card.addEventListener('click', () => { if (info.id) { markRead(info.id); saveWholeCache(); } }, true); // 클릭 시점 저장: 이후 재렌더링에서 카드가 DOM에서 사라져도 캐시에 남아 복원됨
   }
   function addReadTag(card) {
     if (card.querySelector('.sr-tag-read')) return;
@@ -456,7 +464,7 @@
     }
   }
 
-  function organize() {
+  function organizeInner() {
     const all = cards();
     if (!all.length) return;
     // 이동 단위: 카드 링크 하나만 담은 가장 바깥 래퍼(스크랩/입사지원 버튼 포함)까지 올라가 래퍼째 이동
@@ -582,6 +590,13 @@
         wholeLoadedCount = cards().length;
       }
     }
+  }
+
+  // organize 재진입 가드: 이미 실행 중이면 300ms 뒤에 다시 실행 (스냅샷이 낡은 채로 겹쳐 그리면 카드 소실)
+  function organize() {
+    if (organizing) { schedule(); return; }
+    organizing = true;
+    try { organizeInner(); } finally { organizing = false; }
   }
 
   let timer = null;
