@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Saramin Filter (반경 그룹 + 차단 + 읽음)
 // @namespace    https://m.saramin.co.kr/
-// @version      1.0.8
+// @version      1.0.9
 // @description  사람인 모바일 검색: 업체 차단 + 기준점 반경 아코디언 그룹핑 + 클린 카드 + 읽음 태그 (지원내역 동기화는 추후 추가 예정)
 // @match        https://m.saramin.co.kr/search*
 // @grant        none
@@ -270,9 +270,13 @@
   let wholeLoaded = false, wholeLoadedCount = 0, wholeLoading = false, restoreAttempted = false;
 
   // 검색 식별자 (page 파라미터 제외) — 전체 로드 캐시의 검색 일치 판정용
+  // ajax 파라미터도 제외: 공고 카드 클릭 시 Recruit.js가 pushState로 '&ajax=none'을 붙이고,
+  // 뒤로가기 후 새로고침된 목록은 ajax=none URL로 열려서, 제외하지 않으면 저장된 캐시 키와
+  // 달라져 복원이 실패한다 (run9 실측: srWhole=692건 저장됐는데도 groups=0/badge 없음).
   function searchKey() {
     const u = new URL(location.href);
     u.searchParams.delete('page');
+    u.searchParams.delete('ajax');
     return u.pathname + u.search;
   }
   // 전체 로드 결과를 세션 스토리지에 파싱 데이터로 저장 (전체 HTML은 용량 초과라 텍스트 정보만 저장, 3000건 상한)
